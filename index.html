@@ -1,0 +1,415 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Google Fonts - Nunito (Avenir Next alternative) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Esri Leaflet -->
+  <script src="https://unpkg.com/esri-leaflet@3.0.19/dist/esri-leaflet.js"></script>
+  
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      font-family: 'Nunito', sans-serif;
+    }
+
+    #map {
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #swipe-control {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      background: #fff;
+      cursor: ew-resize;
+      z-index: 1000;
+      box-shadow: 0 0 6px rgba(0,0,0,0.5);
+      transform: translateX(-50%);
+    }
+
+    #swipe-handle {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 30px;
+      height: 60px;
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #swipe-handle::before {
+      content: "⋮⋮";
+      color: #666;
+      font-size: 16px;
+      letter-spacing: 2px;
+    }
+
+    .swipe-label {
+      position: absolute;
+      top: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 4px 8px;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: bold;
+      white-space: nowrap;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+
+    .swipe-label-left {
+      right: 10px;
+    }
+
+    .swipe-label-right {
+      left: 10px;
+    }
+
+    #hillshade-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: white;
+      padding: 15px;
+      border-radius: 4px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      z-index: 1000;
+      font-size: 14px;
+    }
+
+    #logo {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      z-index: 1000;
+      height: 60px;
+      background: rgba(255,255,255,0.8);
+      padding: 8px 10px 8px 8px;
+      border-radius: 0 4px 0 0;
+    }
+
+    #hillshade-controls h3 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+    }
+
+    #hillshade-controls label {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    #hillshade-controls input[type="range"] {
+      width: 150px;
+      vertical-align: middle;
+      accent-color: #2f6b85;
+    }
+
+    #hillshade-controls .control-row {
+      margin-bottom: 10px;
+    }
+
+    #hillshade-controls .value {
+      display: inline-block;
+      width: 40px;
+      text-align: right;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="map"></div>
+  <img id="logo" src="logo.svg" alt="Logo">
+  <div id="swipe-control">
+    <div class="swipe-label swipe-label-left">Phase 1</div>
+    <div class="swipe-label swipe-label-right">Phase 2</div>
+    <div id="swipe-handle"></div>
+  </div>
+  <div id="hillshade-controls">
+    <h3>Hillshade Settings</h3>
+    <div class="control-row">
+      <label>Azimuth: <span id="azimuth-value" class="value">315</span></label>
+      <input type="range" id="azimuth" min="0" max="360" value="315">
+    </div>
+    <div class="control-row">
+      <label>Altitude: <span id="altitude-value" class="value">45</span></label>
+      <input type="range" id="altitude" min="0" max="90" value="45">
+    </div>
+    <div class="control-row">
+      <label>Z Factor: <span id="zfactor-value" class="value">1</span></label>
+      <input type="range" id="zfactor" min="0.1" max="10" step="0.1" value="1">
+    </div>
+  </div>
+  <script>
+    // Parse URL hash for initial view (format: #zoom/lat/lng)
+    const getViewFromHash = () => {
+      const hash = window.location.hash.slice(1);
+      if (hash) {
+        const parts = hash.split('/');
+        if (parts.length === 3) {
+          const zoom = parseInt(parts[0]);
+          const lat = parseFloat(parts[1]);
+          const lng = parseFloat(parts[2]);
+          if (!isNaN(zoom) && !isNaN(lat) && !isNaN(lng)) {
+            return { center: [lat, lng], zoom };
+          }
+        }
+      }
+      return { center: [38, -84], zoom: 7 };
+    };
+
+    const initialView = getViewFromHash();
+
+    // create the map
+    const map = L.map("map").setView(initialView.center, initialView.zoom);
+    // create panes for vector layer ordering
+    const panes = ["middle", "top"]
+    panes.forEach((pane, i) => {
+      map.createPane(pane);
+      map.getPane(pane).style.zIndex = 401 + i;
+    });
+
+    // Create a rendering rule to apply to the raster layer
+    // This example uses a colormap to change the color scheme of the hillshade
+    const warmColorRamp = {
+      "rasterFunction": "Colormap",
+      "rasterFunctionArguments": {
+        "colorramp": {
+          "type": "multipart",
+          "colorRamps": [
+            {
+              "type": "algorithmic",
+              "fromColor": [
+                120,
+                110,
+                100,
+                0
+              ],
+              "toColor": [
+                245,
+                245,
+                245,
+                0
+              ],
+              "algorithm": "esriCIELabAlgorithm",
+            }
+          ]
+        }
+      }
+    }
+
+    // Cool blue tint: remaps the hillshade grayscale from dark blue shadows to light blue highlights
+    const coolColorRamp = {
+      "rasterFunction": "Colormap",
+      "rasterFunctionArguments": {
+        "colorramp": {
+          "type": "multipart",
+          "colorRamps": [
+            {
+              "type": "algorithmic",
+              "fromColor": [10, 30, 80, 0],
+              "toColor": [200, 220, 255, 0],
+              "algorithm": "esriCIELabAlgorithm"
+            }
+          ]
+        }
+      }
+    }
+
+    // Green-to-white earth tones: dark green valleys fading to bright white peaks
+    const earthColorRamp = {
+      "rasterFunction": "Colormap",
+      "rasterFunctionArguments": {
+        "colorramp": {
+          "type": "multipart",
+          "colorRamps": [
+            {
+              "type": "algorithmic",
+              "fromColor": [30, 70, 30, 0],
+              "toColor": [250, 240, 230, 0],
+              "algorithm": "esriCIELabAlgorithm"
+            }
+          ]
+        }
+      }
+    }
+
+
+    // Add image layer with rendering rule applied
+    L.esri.imageMapLayer({
+      url: "https://kyraster.ky.gov/arcgis/rest/services/ElevationServices/Ky_DEM_KYAPED_2FT_Phase2_Hillshade/ImageServer",
+      renderingRule: coolColorRamp,
+      pane: "middle",
+    })//.addTo(map);
+
+    // Hillshade parameters (will be updated by form)
+    const hillshadeParams = {
+      azimuth: 315,
+      altitude: 45,
+      zFactor: 1
+    };
+
+    const createHillshadeRule = () => ({
+      "rasterFunction": "Hillshade",
+      "rasterFunctionArguments": {
+        "Azimuth": hillshadeParams.azimuth,
+        "Altitude": hillshadeParams.altitude,
+        "ZFactor": hillshadeParams.zFactor
+      }
+    });
+
+    const slopeEffectRule = {
+      "rasterFunction": "Slope",
+      "rasterFunctionArguments": {
+        "ZFactor": 1,
+        "OutputMeasurement:": "DEGREE"
+      }
+    }
+
+    // Add image layer with rendering rule applied
+    const middleLayer = L.esri.imageMapLayer({
+      url: "https://kyraster.ky.gov/arcgis/rest/services/ElevationServices/Ky_DSM_First_Return_2FT_Phase2/ImageServer",
+      renderingRule: createHillshadeRule(),
+      pane: "middle",
+    }).addTo(map);
+
+
+    // Add image layer with rendering rule applied
+    const topLayer = L.esri.imageMapLayer({
+      url: "https://kyraster.ky.gov/arcgis/rest/services/ElevationServices/Ky_DSM_First_Return_5FT_Phase1/ImageServer",
+      //url: "https://kyraster.ky.gov/arcgis/rest/services/TestImageServices/Ky_FloodImagery_3IN_WM/ImageServer",
+      renderingRule: createHillshadeRule(),
+      pane: "top",
+    }).addTo(map);
+
+    // Hillshade control event listeners
+    const updateHillshadeLayers = () => {
+      const newRule = createHillshadeRule();
+      middleLayer.setRenderingRule(newRule);
+      topLayer.setRenderingRule(newRule);
+    };
+
+    document.getElementById('azimuth').addEventListener('input', (e) => {
+      hillshadeParams.azimuth = parseInt(e.target.value);
+      document.getElementById('azimuth-value').textContent = e.target.value;
+      updateHillshadeLayers();
+    });
+
+    document.getElementById('altitude').addEventListener('input', (e) => {
+      hillshadeParams.altitude = parseInt(e.target.value);
+      document.getElementById('altitude-value').textContent = e.target.value;
+      updateHillshadeLayers();
+    });
+
+    document.getElementById('zfactor').addEventListener('input', (e) => {
+      hillshadeParams.zFactor = parseFloat(e.target.value);
+      document.getElementById('zfactor-value').textContent = e.target.value;
+      updateHillshadeLayers();
+    });
+
+    // Swipe control functionality
+    const swipeControl = document.getElementById('swipe-control');
+    const topPane = map.getPane('top');
+    let isDragging = false;
+
+    // Initialize swipe position to middle of page
+    const initSwipe = () => {
+      const x = window.innerWidth / 2;
+      swipeControl.style.left = x + 'px';
+      updateClip(x);
+    };
+
+    const mapPane = map.getPane('mapPane');
+
+    const updateClip = (x) => {
+      // Get the map pane's current transform to offset the clip (Leaflet applies transforms here during pan)
+      const transform = mapPane.style.transform;
+      let offsetX = 0, offsetY = 0;
+      if (transform) {
+        const match = transform.match(/translate3d\((-?\d+)px,\s*(-?\d+)px/);
+        if (match) {
+          offsetX = parseInt(match[1]);
+          offsetY = parseInt(match[2]);
+        }
+      }
+      // Clip the top pane, accounting for transform offset
+      topPane.style.clip = `rect(${-offsetY}px, ${x - offsetX}px, ${window.innerHeight - offsetY}px, ${-offsetX}px)`;
+    };
+
+    const onMove = (e) => {
+      if (!isDragging) return;
+      const x = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+      const clampedX = Math.max(0, Math.min(window.innerWidth, x));
+      swipeControl.style.left = clampedX + 'px';
+      updateClip(clampedX);
+    };
+
+    const onEnd = () => {
+      isDragging = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onEnd);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
+    };
+
+    swipeControl.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      e.preventDefault();
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onEnd);
+    });
+
+    swipeControl.addEventListener('touchstart', (e) => {
+      isDragging = true;
+      document.addEventListener('touchmove', onMove);
+      document.addEventListener('touchend', onEnd);
+    });
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      const currentX = parseInt(swipeControl.style.left) || window.innerWidth / 2;
+      updateClip(Math.min(currentX, window.innerWidth));
+    });
+
+    // Re-apply clip when map moves or zooms to handle tile redraws
+    map.on('move zoom', () => {
+      const currentX = parseInt(swipeControl.style.left) || window.innerWidth / 2;
+      updateClip(currentX);
+    });
+
+    // Update URL hash with current view for sharing
+    const updateHash = () => {
+      const center = map.getCenter();
+      const zoom = map.getZoom();
+      const hash = `${zoom}/${center.lat.toFixed(5)}/${center.lng.toFixed(5)}`;
+      history.replaceState(null, null, '#' + hash);
+    };
+
+    map.on('moveend', updateHash);
+    updateHash();
+
+    // Initialize
+    initSwipe();
+
+
+  </script>
+</body>
+
+</html>
